@@ -16,23 +16,23 @@ from tqdm import tqdm
 
 from etl_utils import ETLUtils
 
-DATA_FOLDER = '/Users/fpena/Stuff/Daft'
+DATA_FOLDER = '/Users/fpena/Projects/daft/data/'
 
 RENT_TYPE_MAP = {
     'rooms': RentType.ROOMS_TO_SHARE,
     'places': RentType.ANY
 }
-# RENT_TYPE = 'rooms'
-RENT_TYPE = 'places'
-LOCATION = 'Dublin City'
+RENT_TYPE = 'rooms'
+# RENT_TYPE = 'places'
+LOCATION =  'Ireland'
 
 # CSV_FILE = '/tmp/daft_donnybrook.csv'
 # CSV_LOCATION_FILE = '/tmp/daft_location_donnybrook.csv'
 # CSV_FILE = '/tmp/daft_%s.csv' % time.strftime("%Y-%m-%d")
-CSV_FILE = '/tmp/daft_%s_%s_%s.csv' % (
+CSV_FILE = '%sdaft_%s_%s_%s.csv' % (DATA_FOLDER,
     LOCATION.lower().replace(' ', '_'), RENT_TYPE, time.strftime("%Y-%m-%d"))
 # CSV_FILE = '/tmp/daft_donnybrook_%s.csv' % time.strftime("%Y-%m-%d")
-CSV_LOCATION_FILE = '/tmp/daft_location.csv'
+# CSV_LOCATION_FILE = '/tmp/daft_location.csv'
 
 TIME_PRICE_PER_HOUR = 20
 
@@ -98,6 +98,7 @@ def fix_address(address):
 
 
 def get_listings():
+    print('%s: Getting daft listings for %s' % (time.strftime("%Y/%m/%d-%H:%M:%S"), RENT_TYPE))
 
     daft = Daft()
     # daft.set_county("Dublin City")
@@ -145,49 +146,8 @@ def get_listings():
     return all_listings
 
 
-def update_listings_location():
-
-    # data_frame = pandas.read_csv(CSV_FILE)
-    data_frame = pandas.read_csv(CSV_LOCATION_FILE)
-
-    geolocator = Nominatim(user_agent="specify_your_app_name_here")
-    ucd_location = geolocator.geocode("O'Brien Centre for Science, Dublin")
-
-    print(data_frame.describe())
-    print(data_frame.head())
-    print(len(data_frame))
-
-    for i, row in data_frame.iterrows():
-    #     # print(row['formalised_address'])
-        address = row['formalised_address']
-        data_frame[['latitude', 'longitude', 'distance_to_ucd']] =\
-            data_frame[['latitude', 'longitude', 'distance_to_ucd']].astype(str)
-
-        if not math.isnan(row['distance_to_ucd']):
-            continue
-        try:
-            location = fix_address(address)
-            print(i, location)
-            # location = None
-            if location is None:
-                data_frame.at[i, 'latitude'] = 'N/A'
-                data_frame.at[i, 'longitude'] = 'N/A'
-                data_frame.at[i, 'distance_to_ucd'] = 'N/A'
-            else:
-                data_frame.at[i, 'latitude'] = location.latitude
-                data_frame.at[i, 'longitude'] = location.longitude
-                data_frame.at[i, 'distance_to_ucd'] = get_distance(ucd_location, location)
-        except GeocoderQuotaExceeded:
-            print('GeocoderQuotaExceeded')
-            break
-    #     print(row['longitude'])
-
-    print(data_frame.to_string())
-
-    data_frame.to_csv(CSV_LOCATION_FILE)
-
-
 def export_listings(listings):
+    print("%s: Exporting listings" % (time.strftime("%Y/%m/%d-%H:%M:%S")))
 
     records = []
     ucd_coordinates = (53.30841565, -6.22380666284744)
@@ -205,6 +165,10 @@ def export_listings(listings):
                 try_attempts += 1
                 time.sleep(3)
                 print('Retrying. Attempt number %d' % try_attempts)
+            except KeyError:
+                print('KeyError found. Continuing with the next record')
+                continue
+
         # record['price'] = listing.price.encode('utf-8').strip() if listing.price else None
 
 
@@ -228,7 +192,7 @@ def export_listings(listings):
         record['longitude'] = obtain_field(listing, 'longitude')
         record['distance_to_ucd'] = distance(
             ucd_coordinates, (record['latitude'], record['longitude'])).kilometers if record['latitude'] != 'nan' else float('nan')
-        record['city_center_distance'] = listing.city_center_distance
+        # record['city_center_distance'] = listing.city_center_distance
         record['owner_occupied'] = obtain_field(listing, 'owner_occupied').replace('"', '')
         record['property_type'] = obtain_field(listing, 'property_type').replace('"', '')
         record['room_type'] = obtain_field(listing, 'room_type').replace('"', '')
@@ -245,7 +209,12 @@ def export_listings(listings):
         # price = float(obtain_field(listing, 'price').replace('"', ''))
         # price_frequency = obtain_field(listing, 'price_frequency').replace('"', '')
         # record['price'] = transform_price_to_monthly(price, price_frequency)
-        record['price'] = transform_string_price(listing.price)
+        try:
+            record['price'] = transform_string_price(listing.price)
+        except ValueError as e:
+            print(listing)
+            print('ValueError found. Continuing with the next record')
+            continue
         # record['price'] = listing.price.encode('utf-8')
         # 'shortcode': listing.shortcode,
         # record['date_insert_update'] =\
@@ -258,18 +227,23 @@ def export_listings(listings):
         #     listing.posted_since.encode('utf-8').strip() if listing.posted_since else None
         record['num_bedrooms'] = listing.bedrooms
         record['num_bathrooms'] = listing.bathrooms
-        record['agent'] = listing.agent
+        record['agent'] = listing.agent.encode('utf-8').strip() if listing.agent else None
         record['agent_url'] = listing.agent_url
         record['contact_number'] = str(listing.contact_number)
         record['facilities'] = listing.facilities
         # 'commercial_area_size': listing.commercial_area_size
         record['contact_name'] = obtain_name(listing)
+        # print(record)
 
         records.append(record)
 
     headers = sorted(records[0].keys())
 
     ETLUtils.save_csv_file(CSV_FILE, records, headers)
+
+    # for record in records:
+    #     print(record)
+    #     ETLUtils.write_row_to_csv('/tmp/places.csv', record)
 
 
 def calculate_scores(data_frame):
@@ -319,7 +293,7 @@ def obtain_field(listing, coordinate_type):
 
 def obtain_name(listing):
     div_container = listing._ad_page_content.find('div', {"id": "smi-negotiator-photo"})
-    if div_container is None:
+    if div_container is None or div_container.find('h2') is None:
         return ''
     name = div_container.find('h2').next_element.encode('utf-8').strip()
 
@@ -347,7 +321,8 @@ def transform_string_price(string_price):
     if price_frequency == 'week':
         return price / 7 * 365 / 12
 
-    raise ValueError('Unregonized price frequency \'%s\'' % price_frequency)
+    print('Unrecognized price frequency \'%s\'' % price_frequency)
+    raise ValueError('Unrecognized price frequency \'%s\'' % price_frequency)
 
 
 def obtain_closing_field(listing, coordinate_type):
@@ -379,8 +354,8 @@ def count_nones(listings):
 
 def get_new_entries():
 
-    csv_file_1 = '/tmp/daft_dublin_city_rooms_2018-10-27.csv'
-    csv_file_2 = '/tmp/daft_dublin_city_rooms_2018-10-26.csv'
+    csv_file_1 = '%sdaft_dublin_city_rooms_2018-10-31.csv' % DATA_FOLDER
+    csv_file_2 = '%sdaft_dublin_city_rooms_2018-10-30.csv' % DATA_FOLDER
     # csv_file_2 = '/tmp/daft_2018-10-19.csv'
 
     data_frame_1 = pandas.read_csv(csv_file_1)
@@ -409,6 +384,7 @@ def get_new_entries():
 def filter_data(data_frame):
 
     data_frame = data_frame[data_frame['distance_to_ucd'] <= 4.0]
+    # data_frame = data_frame[data_frame['dwelling_type'] == 'House to Rent']
     data_frame = data_frame[data_frame['owner_occupied'] == 'no']
     data_frame = data_frame[
         ~data_frame['room_type'].isin(['shared', 'twin'])]
@@ -489,7 +465,9 @@ def main():
     # get_new_entries()
     # csv_file = '/tmp/daft_2018-10-19.csv'
 
-    # csv_file = '/tmp/daft_dublin_city_rooms_2018-10-27.csv'
+    # csv_file = '/tmp/daft_dublin_city_rooms_2018-06-22.csv'
+    # csv_file = '/Users/fpena/Projects/daft/data/daft_ireland_rooms_2019-07-28.csv'
+    # csv_file = '/Users/fpena/Projects/daft/data/daft_ireland_places_2019-06-29.csv'
     # data_frame = pandas.read_csv(csv_file)
     # print_ranking(calculate_scores(data_frame))
 
@@ -514,4 +492,4 @@ start = time.time()
 main()
 end = time.time()
 total_time = end - start
-print("Total time = %f seconds" % total_time)
+print("%s: Total time = %f seconds" % (time.strftime("%Y/%m/%d-%H:%M:%S"), total_time))

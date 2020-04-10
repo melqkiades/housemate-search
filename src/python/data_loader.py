@@ -1,4 +1,4 @@
-import math
+import daftlistings
 import pandas
 import time
 
@@ -25,6 +25,7 @@ RENT_TYPE_MAP = {
 RENT_TYPE = 'rooms'
 # RENT_TYPE = 'places'
 LOCATION =  'Ireland'
+# LOCATION =  'Limerick'
 
 # CSV_FILE = '/tmp/daft_donnybrook.csv'
 # CSV_LOCATION_FILE = '/tmp/daft_location_donnybrook.csv'
@@ -112,15 +113,17 @@ def get_listings():
 
     offset = 0
     all_listings = []
+    listings = daft.search()
+    all_listings.extend(listings)
 
-    while True:
-        daft.set_offset(offset)
-        listings = daft.search()
-        all_listings.extend(listings)
-        if not listings:
-            break
+    # while True:
+    #     daft.set_offset(offset)
+    #     listings = daft.search()
+    #     all_listings.extend(listings)
+    #     if not listings:
+    #         break
 
-        offset += 20
+        # offset += 20
 
     print(len(all_listings))
 
@@ -150,6 +153,7 @@ def export_listings(listings):
     print("%s: Exporting listings" % (time.strftime("%Y/%m/%d-%H:%M:%S")))
 
     records = []
+    num_skipped_records = 0
     ucd_coordinates = (53.30841565, -6.22380666284744)
     
     for listing in tqdm(listings):
@@ -177,11 +181,25 @@ def export_listings(listings):
         # 'viewings': listing.upcoming_viewings,
         # 'facilities': listing.facilities,
         # 'overviews': listing.overviews,
+        # print(record)
+        # print(record.keys())
         record['formalised_address'] =\
             listing.formalised_address.encode('utf-8').strip() if listing.formalised_address else None
-        record['address_line_1'] =\
-            listing.address_line_1.encode('utf-8').strip() if listing.address_line_1 else None
-        record['county'] = listing.county.encode('utf-8').strip() if listing.county else None
+        # record['address_line_1'] =\
+        #     listing.address_line_1.encode('utf-8').strip() if listing.address_line_1 else None
+        # record['county'] = listing.county.encode('utf-8').strip() if listing.county else None
+        try:
+            formalised_address = str(record['formalised_address'].decode())
+            # print(formalised_address)
+            if formalised_address is not None:
+                address = formalised_address.split(',')
+                record['county'] = address[-1].strip()
+            else:
+                record['county'] = None
+        except Exception as e:
+            print(e)
+            print('County not saved')
+
         # 'listing_image': listing.images,
         # 'listing_hires_image': listing.hires_images,
         # 'agent': listing.agent,
@@ -205,45 +223,84 @@ def export_listings(listings):
         record['available_for'] = obtain_field(listing, 'available_for').replace('"', '')
         record['gender'] = obtain_field(listing, 'gender').replace('"', '')
         record['seller_type'] = obtain_field(listing, 'seller_type').replace('"', '')
+        try:
+            record['price'] = listing.price
+        except AttributeError:
+            num_skipped_records += 1
+            print('Skipping record: {}'.format(record['daft_link']))
+            continue
 
         # price = float(obtain_field(listing, 'price').replace('"', ''))
         # price_frequency = obtain_field(listing, 'price_frequency').replace('"', '')
         # record['price'] = transform_price_to_monthly(price, price_frequency)
-        try:
-            record['price'] = transform_string_price(listing.price)
-        except ValueError as e:
-            print(listing)
-            print('ValueError found. Continuing with the next record')
-            continue
+        # try:
+        #     record['price'] = transform_string_price(listing.price)
+        # except ValueError as e:
+        #     print(listing)
+        #     print('ValueError found. Continuing with the next record')
+        #     continue
         # record['price'] = listing.price.encode('utf-8')
         # 'shortcode': listing.shortcode,
         # record['date_insert_update'] =\
         #     listing.date_insert_update.encode('utf-8').strip() if listing.date_insert_update else None
         # 'views': listing.views,
         # 'description': listing.description,
-        record['dwelling_type'] =\
-            listing.dwelling_type.encode('utf-8').strip() if listing.dwelling_type else None
+        if RENT_TYPE == 'rooms':
+            record['dwelling_type'] =\
+                listing.dwelling_type.encode('utf-8').strip() if listing.dwelling_type else None
         # record['posted_since'] =\
         #     listing.posted_since.encode('utf-8').strip() if listing.posted_since else None
-        record['num_bedrooms'] = listing.bedrooms
-        record['num_bathrooms'] = listing.bathrooms
-        record['agent'] = listing.agent.encode('utf-8').strip() if listing.agent else None
-        record['agent_url'] = listing.agent_url
-        record['contact_number'] = str(listing.contact_number)
+        try:
+            record['num_bedrooms'] = listing.bedrooms
+        except IndexError:
+            record['num_bedrooms'] = 1
+        try:
+            record['num_bathrooms'] = listing.bathrooms
+        except IndexError:
+            record['num_bathrooms'] = 1
+        # record['agent'] = listing.agent.encode('utf-8').strip() if listing.agent else None
+        # record['agent_url'] = listing.agent_url
+        # record['contact_number'] = str(listing.contact_number)
         record['facilities'] = listing.facilities
         # 'commercial_area_size': listing.commercial_area_size
         record['contact_name'] = obtain_name(listing)
         # print(record)
 
+        convert_field_to_string(record, 'formalised_address')
+        convert_field_to_string(record, 'daft_link')
+        convert_field_to_string(record, 'id')
+
         records.append(record)
 
-    headers = sorted(records[0].keys())
+    print('Skipped a total of {} records'.format(num_skipped_records))
+    data_frame = pandas.DataFrame(records)
+    # data_frame.fillna('', inplace=True)
+    # data_frame['contact_name'] = data_frame['contact_name'].apply(
+    #     lambda s: s.decode('utf-8'))
+    # data_frame['daft_link'] = data_frame['daft_link'].apply(
+    #     lambda s: s.decode('utf-8'))
+    # data_frame['dwelling_type'] = data_frame['dwelling_type'].apply(
+    #     lambda s: s.decode('utf-8') if s is not None else s)
+    # data_frame['formalised_address'] = data_frame['formalised_address'].apply(
+    #     lambda s: s.decode('utf-8'))
+    # data_frame['id'] = data_frame['id'].apply(
+    #     lambda s: s.decode('utf-8'))
+    data_frame.to_csv(CSV_FILE, encoding='UTF_8')
 
-    ETLUtils.save_csv_file(CSV_FILE, records, headers)
+    # headers = sorted(records[0].keys())
+
+    # ETLUtils.save_csv_file(CSV_FILE, records, headers)
 
     # for record in records:
     #     print(record)
     #     ETLUtils.write_row_to_csv('/tmp/places.csv', record)
+
+
+def convert_field_to_string(record, field):
+    value = record[field]
+    if not isinstance(value, str) and value is not None:
+        # print(type(value), value)
+        record[field] = value.decode()
 
 
 def calculate_scores(data_frame):
@@ -471,7 +528,7 @@ def main():
     # data_frame = pandas.read_csv(csv_file)
     # print_ranking(calculate_scores(data_frame))
 
-
+# TODO: Remove the b' prefix when exporting the data to CSV
 # TODO: Get the new ads each time after running the query
 # TODO: Optimize the get_listings() function by only taking the new IDs
 # TODO: Read if description contains the word linkedin to include the profile
